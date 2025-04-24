@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AImpact for Kickout API '
+
+Parameters:
+  AppName:
+    Type: String
+    Default: Hackathon
+    Description: Name of the application 
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-sonnet-20240229-v1:0
+    Description: Bedrock foundation model ID for agents
+  NodeJSRuntime:
+    Type: String
+    Default: nodejs20.x
+    Description: Python runtime for Lambda functions
+
+Resources:
+          
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:AttachNetworkInterface'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                  - sqs:*
+                  - s3:*
+                  - stepfunction:*
+                  - apigateway:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock:*
+                Resource: '*'
+              # Adding specific Bedrock agent permissions
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeAgent'
+                  - 'bedrock:InvokeModel'
+                Resource: '*'
+  KickoutLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref KickoutLambda
+      Principal: bedrock.amazonaws.com
+
+  KickoutLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "aimpact-kickout-api-lda"
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: !Ref NodeJSRuntime
+      Environment:
+        Variables:
+          MODEL_ID: !Ref BedrockModelId
+      Timeout: 900
+      Tags:
+        - Key: AppName
+          Value: HACKATHON
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+              const response = {
+                  statusCode: 200,
+                  body: JSON.stringify('Hello from Lambda!'),
+              };
+              return response;
+          };
+  ApiLambdaPermission:
+    # Condition: IsLive
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt KickoutLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  ############ API GATEWAY
+#   KickoutAPI:
+#     Type: AWS::ApiGateway::RestApi
+#     Properties:
+#       Name: aimpact-kickout-api
+#       Description: API for form validation
+#       EndpointConfiguration:
+#         Types:
+#           - PRIVATE
+#         VpcEndpointIds:
+#           - vpce-00885819822df6078
+#       Policy:
+#         Version: '2012-10-17'
+#         Statement:
+#           - Effect: Allow
+#             Principal: '*'
+#             Action: 'execute-api:Invoke'
+#             Resource: '*'
+#       Tags:
+#         - Key: AppName
+#           Value: HACKATHON
+
+#   ValidateResource:
+#     Type: AWS::ApiGateway::Resource
+#     Properties:
+#       RestApiId: !Ref KickoutAPI
+#       ParentId: !GetAtt KickoutAPI.RootResourceId
+#       PathPart: '{proxy+}'
+
+#   KickoutMethod:
+#     Type: AWS::ApiGateway::Method
+#     Properties:
+#       RestApiId: !Ref KickoutAPI
+#       ResourceId: !Ref ValidateResource
+#       HttpMethod: POST
+#       AuthorizationType: NONE
+#       AuthorizerId: NONE
+#       Integration:
+#         Type: AWS_PROXY
+#         IntegrationHttpMethod: POST
+#         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${KickoutLambda.Arn}/invocations"
+#       MethodResponses:
+#         - StatusCode: 200
+
+#   ApiDeployment:
+#     Type: AWS::ApiGateway::Deployment
+#     DependsOn:
+#       - KickoutMethod
+#       - KickoutLambda
+#     Properties:
+#       RestApiId: !Ref KickoutAPI
+
+#   ApiStage:
+#     Type: AWS::ApiGateway::Stage
+#     Properties:
+#       StageName: dev
+#       RestApiId: !Ref KickoutAPI
+#       DeploymentId: !Ref ApiDeployment
+#       TracingEnabled: True
+#       Variables:
+#         Stack: dev
+#       MethodSettings:
+#         - ResourcePath: /validate
+#           HttpMethod: POST
+#           MetricsEnabled: 'false'
+#           DataTraceEnabled: 'false'
+# Outputs:
+#   LambdaFunctionApi:
+#     Value: !Sub "https://${KickoutAPI}.execute-api.${AWS::Region}.amazonaws.com/"

@@ -1,0 +1,351 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AImpact for Classification'
+
+Parameters:
+  AppName:
+    Type: String
+    Default: Hackathon
+    Description: Name of the application 
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-sonnet-20240229-v1:0
+    Description: Bedrock foundation model ID for agents
+  PythonRuntime:
+    Type: String
+    Default: python3.9
+    Description: Python runtime for Lambda functions
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Description: Creating Amazon S3 bucket to hold source data for kickout files
+    Properties:
+      BucketName: !Sub aimpact-${AWS::Region}-kickout
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags: 
+        - Key: AppName
+          Value: Hackathon
+          
+  BedrockAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'BedrockAssume'
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': '911962207156'
+          - Sid: 'AllowCTMDevOpsAssume'
+            Effect: Allow
+            Principal:
+              AWS: 'arn:aws:iam::911962207156:role/CTM-DevOps'
+            Action: 'sts:AssumeRole'
+          - Sid: 'AllowCFNRole'
+            Effect: Allow
+            Principal:
+              AWS: 'arn:aws:iam::911962207156:role/A5-DevOps-App-Stack'
+            Action: 'sts:AssumeRole'
+          - Sid: 'AllowCTMDeveloperAssume'
+            Effect: Allow
+            Principal:
+              AWS: 'arn:aws:iam::911962207156:role/CTM-Developer'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: BedrockAgentPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                  - sqs:*
+                  - s3:*
+                  - stepfunction:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock:*
+                Resource: '*'
+              # - Effect: Allow
+              #   Action:
+              #     - s3:*
+              #   Resource: !GetAtt S3Bucket.Arn
+              - Effect: Allow
+                Action:
+                  - 'bedrock:*'
+                Resource:
+                  - 'arn:aws:bedrock:us-east-1::foundation-model/*'
+              
+
+  # Bedrock Agents
+  ClassificationAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub "aimpact-afra-classification-agent"
+      FoundationModel: !Ref BedrockModelId
+      Instruction: |
+        You are a Kickout Classification Agent responsible for identifying error type and return data extraction details as json response where you get input S3 path where file is saved and pass parameter to action group. The detailed workflow is defined as follows:
+        1. File Analysis:
+        - Parse kickout CSV files from S3
+        - Extract GTL details (Fund, Clearing Broker, Trader)
+        - Identify error messages and patterns
+        - Determine root cause based on error patterns
+        2. Error Classification:
+        Primary Error Types to Identify:
+        - [CLEAR SUBBROKER NOT FOUND]
+        - [FTB ACCOUNT NOT FOUND]
+        - [TRADER ID NOT FOUND]
+        - [FUND NOT FOUND]
+        4. FTB Setup Detection Rules:
+        When to Route to FTB:
+        - Clear Subbroker/FTB Account missing
+        5. Data Extraction Requirements:
+        For FTB Cases, Extract:
+        - Fund, trader, clearBroker details from the csv and return as json response
+      AgentResourceRoleArn: !GetAtt BedrockAgentRole.Arn
+      KnowledgeBases:
+        - KnowledgeBaseId: O88VC8ABIF
+          KnowledgeBaseState: ENABLED
+          Description: Classification
+      ActionGroups:
+        - ActionGroupName: KickoutActions
+          ApiSchema:
+            S3:
+              S3BucketName: aimpact-us-east-1-kickout
+              S3ObjectKey: openapi-schemas/openapi_kickout_schema.yaml
+          ActionGroupExecutor:
+            Lambda: !GetAtt KickoutLambda.Arn
+        # - ActionGroupName: KickoutActions
+        #   ApiSchema:
+        #     S3:
+        #       S3BucketName: test-hloberas-dev-16058
+        #       S3ObjectKey: openapi-schemas/ftb-agent-data-extract-api.yaml
+        #   ActionGroupExecutor:
+        #     Lambda: !GetAtt KickoutLambda.Arn
+        # - ActionGroupName: KickoutFileProcessor
+        #   Description: 'Process kickout files from S3'
+        #   ActionGroupExecutor:
+        #     Lambda: !GetAtt KickoutLambda.Arn
+        #   ApiSchema:
+        #     Payload: |
+        #       {
+        #         "openapi": "3.0.0",
+        #         "info": {
+        #           "title": "Kickout File Processor API",
+        #           "version": "1.0.0"
+        #         },
+        #         "paths": {
+        #           "/process": {
+        #             "post": {
+        #               "summary": "Process kickout file",
+        #               "parameters": [
+        #                 {
+        #                   "name": "filename",
+        #                   "in": "query", 
+        #                   "required": true,
+        #                   "schema": {
+        #                     "type": "string"
+        #                   }
+        #                 }
+        #               ],
+        #               "responses": {
+        #                 "200": {
+        #                   "description": "Success"
+        #                 }
+        #               }
+        #             }
+        #           }
+        #         }
+        #       }
+      Tags:
+        AppName: HACKATHON
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:AttachNetworkInterface'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                  - sqs:*
+                  - s3:*
+                  - stepfunction:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock:*
+                Resource: '*'
+              # Adding specific Bedrock agent permissions
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeAgent'
+                  - 'bedrock:InvokeModel'
+                Resource: '*'
+  KickoutLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref KickoutLambda
+      Principal: bedrock.amazonaws.com
+
+  KickoutLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "aimpact-kickout-classification"
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: !Ref PythonRuntime
+      Environment:
+        Variables:
+          MODEL_ID: !Ref BedrockModelId
+      Timeout: 900
+      Tags:
+        - Key: AppName
+          Value: HACKATHON
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import re
+          import uuid
+          from datetime import datetime
+
+          def handler(event, context):
+            print("hello")
+
+  ############# API GATEWAY
+  # FormValidationAPI:
+  #   Type: AWS::ApiGateway::RestApi
+  #   Properties:
+  #     Name: hloberas-hackathon-form-validation-api
+  #     Description: API for form validation
+  #     EndpointConfiguration:
+  #       Types:
+  #         - PRIVATE
+  #       VpcEndpointIds:
+  #         - vpce-00885819822df6078
+  #     Policy:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal: '*'
+  #           Action: 'execute-api:Invoke'
+  #           Resource:
+  #             - !Sub "arn:aws:execute-api:*:${AWS::AccountId}:*/dev/*/*"
+  #             - !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:a1df92jsj6/dev/*/*"
+  #     Tags:
+  #       - Key: AppName
+  #         Value: HACKATHON
+
+  # ValidateResource:
+  #   Type: AWS::ApiGateway::Resource
+  #   Properties:
+  #     RestApiId: !Ref FormValidationAPI
+  #     ParentId: !GetAtt FormValidationAPI.RootResourceId
+  #     PathPart: validate
+
+  # ValidateMethod:
+  #   Type: AWS::ApiGateway::Method
+  #   Properties:
+  #     RestApiId: !Ref FormValidationAPI
+  #     ResourceId: !Ref ValidateResource
+  #     HttpMethod: POST
+  #     AuthorizationType: NONE
+  #     AuthorizerId: NONE
+  #     Integration:
+  #       Type: AWS_PROXY
+  #       IntegrationHttpMethod: POST
+  #       Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiHandlerLambda.Arn}/invocations"
+  #     MethodResponses:
+  #       - StatusCode: 200
+
+  # ApiDeployment:
+  #   Type: AWS::ApiGateway::Deployment
+  #   DependsOn:
+  #     - ValidateMethod
+  #     - ApiHandlerLambda
+  #   DependsOn: ValidateMethod
+  #   Properties:
+  #     RestApiId: !Ref FormValidationAPI
+
+  # ApiStage:
+  #   Type: AWS::ApiGateway::Stage
+  #   Properties:
+  #     StageName: dev
+  #     RestApiId: !Ref FormValidationAPI
+  #     DeploymentId: !Ref ApiDeployment
+  #     TracingEnabled: True
+  #     Variables:
+  #       Stack: dev
+  #     MethodSettings:
+  #       - ResourcePath: /validate
+  #         HttpMethod: POST
+  #         MetricsEnabled: 'false'
+  #         DataTraceEnabled: 'false'
+
+  # ApiGatewayLambdaPermission:
+  #   Type: AWS::Lambda::Permission
+  #   DependsOn: ApiHandlerLambda
+  #   Properties:
+  #     Action: lambda:InvokeFunction
+  #     FunctionName: !Ref ApiHandlerLambda
+  #     Principal: apigateway.amazonaws.com
+
+  # RegexValidationLambdaPermission:
+  #   Type: AWS::Lambda::Permission
+  #   DependsOn: RegexValidationLambda
+  #   Properties:
+  #     Action: lambda:InvokeFunction
+  #     FunctionName: !Ref RegexValidationLambda
+  #     Principal: bedrock.amazonaws.com
+
+  # DynamoDBCheckLambdaPermission:
+  #   Type: AWS::Lambda::Permission
+  #   DependsOn: DynamoDBCheckLambda
+  #   Properties:
+  #     Action: lambda:InvokeFunction
+  #     FunctionName: !Ref DynamoDBCheckLambda
+  #     Principal: bedrock.amazonaws.com

@@ -1,0 +1,279 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AImpact'
+
+Parameters:
+  AppName:
+    Description: Name of the hosted service application (product)
+    Type: String
+    ConstraintDescription: Name can only contain lower case letters, numbers and dashes (without beginning or ending with a dash).
+    Default: HACKATHON
+  LcEnv:
+    Description: Lowercase of Env
+    Type: String
+    Default: dev
+  Env:
+    Description: Name of Environment
+    Type: String
+    Default: DEV
+    AllowedValues: #http://confluence/display/STANDARDS/AWS+Tagging+Standard
+      - DEV #Development
+      - DR  #Disaster Recovery
+      - PRD #Production
+      - UAT #User Acceptance Test
+      - QA  #Quality Assurance
+      - PAL #Parallel - Similar to Production with data
+      - INT #Integration Environment - technically similar to prod - not the data
+      - RSH #Research - not directly connected to Citco Network
+# Conditions:
+#   XRayTracingOn:
+#     !Equals [!Ref XRayTracing, "ENABLED"]
+#   IsDEV: !Equals [!Ref Env, "DEV"]
+
+Mappings:
+  RegionMap:
+    eu-west-1:
+      region: euwest1
+    eu-west-2:
+      region: euwest2
+    us-east-1:
+      region: useast1
+    us-west-2:
+      region: uswest2
+  VPCEIdMap:
+    "221048274280":
+      AccountName: citcoshareddev01
+      euwest1: AWS40-TRANSIT-SHAREDSVC-APIGW-VPCE-ID
+      euwest2: AWS41-TRANSIT-SHAREDSVC-APIGW-VPCE-ID
+      useast1: AWS49-TRANSIT-SHAREDSVC-APIGW-VPCE-ID
+      uswest2: AWS71-TRANSIT-SHAREDSVC-APIGW-VPCE-ID
+    "261034401473":
+      AccountName: citcosharedtest01
+      euwest1: AWS34-APIGW-VPCE-ID
+      euwest2: AWS87-APIGW-VPCE-ID
+      useast1: AWS73-APIGW-VPCE-ID
+      uswest2: AWS74-APIGW-VPCE-ID
+    "857871466570":
+      AccountName: citcosharedprod01
+      euwest1: AWS37-TRANSIT-SHAREDSVC-APIGW-VPCE-ID
+      euwest2: AWS38-TRANSIT-SHAREDSVC-APIGW-VPCE-ID
+      useast1: AWS52-TRANSIT-SHAREDESVC-APIGW-VPCE-ID
+      uswest2: AWS56-TRANSIT-SHAREDSVC-APIGW-VPCE-ID
+    "442645024664":
+      AccountName: citcocoredev01
+      euwest1: AWS34-APIGW-VPCE-ID
+      euwest2: AWS87-APIGW-VPCE-ID
+      useast1: AWS50-APIGW-VPCE-ID
+      uswest2: AWS57-APIGW-VPCE-ID
+    "460996569110":
+      AccountName: citcocoretest01
+      euwest1: AWS62-APIGW-VPCE-ID
+      euwest2: AWS69-APIGW-VPCE-ID
+      useast1: AWS53-APIGW-VPCE-ID
+      uswest2: AWS60-APIGW-VPCE-ID 
+    "494239966677":
+      AccountName: citcocoreprod01
+      euwest1: AWS85-APIGW-VPCE-ID
+      euwest2: AWS86-APIGW-VPCE-ID
+      useast1: AWS58-APIGW-VPCE-ID
+      uswest2: AWS59-APIGW-VPCE-ID
+    "911962207156":
+      AccountName: citcocsgdev01
+      euwest1: AWS43-APIGW-VPCE-ID
+      euwest2: AWS42-APIGW-VPCE-ID
+      useast1: AWS51-APIGW-VPCE-ID
+      uswest2: AWS68-APIGW-VPCE-ID
+    "684997503032":
+      AccountName: citcocsgtest01
+      euwest1: AWS46-APIGW-VPCE-ID
+      euwest2: AWS48-APIGW-VPCE-ID
+      useast1: AWS65-APIGW-VPCE-ID
+      uswest2: AWS72-APIGW-VPCE-ID 
+    "261263252453":
+      AccountName: citcocsgprod01
+      euwest1: AWS32-APIGW-VPCE-ID
+      euwest2: AWS33-APIGW-VPCE-ID
+      useast1: AWS66-APIGW-VPCE-ID
+      uswest2: AWS70-APIGW-VPCE-ID
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Description: Creating Amazon S3 bucket to hold source data for excel files (POC)
+    Properties:
+      BucketName: !Sub aimpact-${AWS::Region}-knowledgebase
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags: 
+        - Key: AppName
+          Value: !Ref AppName
+  BedrockPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action: bedrock:*
+          Resource: '*'
+        - Effect: Allow
+          Action: aoss:*
+          Resource: '*'
+  # IAM Role for Bedrock Agent
+  BedrockAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: bedrock.amazonaws.com
+          Action: sts:AssumeRole
+        - Sid: 'AllowCTMDevOpsAssume'
+          Effect: Allow
+          Principal:
+            AWS: 'arn:aws:iam::911962207156:role/CTM-DevOps'
+          Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSLambda_FullAccess
+        - !Ref BedrockPolicy
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !GetAtt S3Bucket.Arn
+                  - !Sub '${S3Bucket.Arn}/*'
+                  
+  # BEDROCK KNOWLEDGE BASE ROLE
+  BedrockKnowledgeBaseRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: AmazonBedrockExecutionRoleForAgents_AImpact
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'BedrockAssume'
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': '911962207156'
+          - Sid: 'AllowCTMDevOpsAssume'
+            Effect: Allow
+            Principal:
+              AWS: 'arn:aws:iam::911962207156:role/CTM-DevOps'
+            Action: 'sts:AssumeRole'
+          - Sid: 'AllowCFNRole'
+            Effect: Allow
+            Principal:
+              AWS: 'arn:aws:iam::911962207156:role/A5-DevOps-App-Stack'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: BedrockKnowledgeBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3AESAccess
+                Effect: Allow
+                Action:
+                  - 's3:*'
+                Resource:
+                  - 'arn:aws:s3:::aimpact*'
+                Condition:
+                  StringEquals:
+                    'aws:ResourceAccount': '911962207156'
+                    's3:x-amz-server-side-encryption': 'AES256'
+              - Sid: S3ListBucketStatement
+                Effect: Allow
+                Action:
+                  - 's3:*'
+                Resource:
+                  - 'arn:aws:s3:::aimpact*'
+                Condition:
+                  StringEquals:
+                    'aws:ResourceAccount': '911962207156'
+              - Effect: Allow
+                Action:
+                  - 'aoss:APIAccessAll'
+                Resource:
+                  - 'arn:aws:aoss:us-east-1:911962207156:collection/*'
+              - Effect: Allow
+                Action:
+                  - 'bedrock:*'
+                Resource:
+                  - 'arn:aws:bedrock:us-east-1::foundation-model/*'
+              - Effect: Allow
+                Action:
+                  - 'kms:Decrypt'
+                  - 'kms:Encrypt'
+                  - 'kms:ReEncrypt*'
+                  - 'kms:GenerateDataKey*'
+                  - 'kms:DescribeKey'
+                  - 'kms:GetKeyPolicy'
+                  - 'kms:GetKeyRotationStatus'
+                  - 'kms:TagResource'
+                  - 'kms:CreateKey'
+                  - 'kms:CreateAlias'
+                  - 'kms:ListAliases'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'kms:*'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 's3:*'
+                  - 'iam:*'
+                  - 'bedrock:*'
+                  - 'ecr:*'
+                Resource: '*'
+      
+
+  # BedrockAgent:
+  #   Type: AWS::Bedrock::Agent
+  #   DependsOn:
+  #     - BedrockAgentRole
+  #   Properties:
+  #     AgentName: !Sub "${CFPrefix}-validation-agent"
+  #     FoundationModel: 'anthropic.claude-2.5-sonnet-20240229-v1:0'
+  #     Instruction: |
+  #       Validate fund_abbrev and fund_name inputs against two rule types:
+
+  #       regex: Match input against specified pattern
+  #       length: Verify character count falls within given range
+
+  #       Validation Guidelines:
+  #       - Check each rule independently
+  #       - Count exact string length regardless of regex result
+  #       - Only flag rules that are actually violated
+
+  #       For any invalid input:
+  #       - Generate specific, actionable suggestions
+  #       - Make suggestions relevant to the actual error
+  #       - Keep feedback clear and user-friendly
+        
+  #       Return JSON with:
+  #       - isValid: true/false
+  #       - errors: array of failed rule messages
+  #       - suggestions: array of improvement tips
+  #     AgentResourceRoleArn: !GetAtt BedrockAgentRole.Arn
+  #     Tags:
+  #       AppName: HACKATHON
