@@ -1,4 +1,4 @@
-// components/EditableForm.tsx
+
 import React, { useState } from 'react';
 import './FormDemo.css'
 
@@ -38,11 +38,6 @@ const EditableForm: React.FC<EditableFormProps> = ({
     }));
   };
 
-  // const handleSave = () => {
-  //   onSave(formData);
-  //   setIsEditing(false);
-  // };
-
   const handleCancel = () => {
     setFormData(initialData);
     setIsEditing(false);
@@ -74,12 +69,20 @@ const EditableForm: React.FC<EditableFormProps> = ({
                   onChange={handleChange}
                 />
               ) : (
-              <div className="form-group">
+                <div className="read-only-field">{formData.fundName}</div>
+              )}
+            </div>
+
+            <div className="form-group">
+             
               <label>Fund Code</label>
               {isEditing ? (
-                <input type="text" name="Fund Code" value={formData.fundCode} onChange={handleChange} />) : (
-                <div className="read-only-field">{formData.fundCode}</div>)}
-                </div>
+                <input
+                  type="text"
+                  name="fundCode"
+                  value={formData.fundCode}
+                  onChange={handleChange}
+                />
               ) : (
                 <div className="read-only-field">{formData.fundCode}</div>
               )}
@@ -153,57 +156,4 @@ const EditableForm: React.FC<EditableFormProps> = ({
 
 export default EditableForm;
 
-// EditableForm.css
 
-
-// App.tsx
-
-// function FormDemo() {
-
-
-
-//   const [isFormOpen, setIsFormOpen] = useState(false);
-
-//   const handleSave = (data: typeof initialFormData) => {
-//     console.log('Saved data:', data);
-//     // Handle saving data to your backend or state management system
-//   };
-// // ------app
-//   return (
-//     <div className="app">
-//       <button 
-//         className="open-form-button"
-//         onClick={() => setIsFormOpen(true)}
-//       >
-//         View Employee Details
-//       </button>
-
-//       <EditableForm
-//         isOpen={isFormOpen}
-//         onClose={() => setIsFormOpen(false)}
-//         initialData={initialFormData}
-//         onSave={handleSave}
-//       />
-//     </div>
-//   );
-// }
-
-// export default FormDemo;
-
-// // App.css
-// .app {
-//   padding: 24px;
-// }
-
-// .open-form-button {
-//   padding: 12px 24px;
-//   background-color: #007bff;
-//   color: white;
-//   border: none;
-//   border-radius: 4px;
-//   cursor: pointer;
-//   font-size: 16px;
-// }
-
-// .open-form-button:hover {
-//   background-color: #0056b3;

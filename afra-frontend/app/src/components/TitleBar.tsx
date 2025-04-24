@@ -9,7 +9,7 @@ const TitleBar = () => {
        <div><h5>KIRA (Kickout Intelligence & Resolution Assistant)</h5></div> 
       </div>
       <ul className="nav-links">
-        <li><a href="/">John</a></li>
+        <li><a href="/">Rian</a></li>
         <li><a href="/about">Notifications</a></li>
         <li><a href="/contact">Logout</a></li>
       </ul>
