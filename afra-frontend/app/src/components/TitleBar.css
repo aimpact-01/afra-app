@@ -1,0 +1,140 @@
+.title-bar {
+    /* background: linear-gradient(to right, #2c3e50, #3498db); */
+    background: 'linear-gradient(45deg,#2c3e50, #3498db 90%)';
+    color: white;
+    padding: 0.5rem 2rem;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 40px;
+  }
+  
+  .logo {
+    font-size: 1.5rem;
+    font-weight: bold;
+    letter-spacing: 1px;
+    transition: transform 0.3s ease;
+  }
+  
+  .logo:hover {
+    transform: scale(1.05);
+  }
+  
+  .nav-links {
+    list-style: none;
+    display: flex;
+    gap: 2rem;
+    margin: 0;
+    padding: 0;
+  }
+  
+  .nav-links li a {
+    color: white;
+    text-decoration: none;
+    font-size: 1rem;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    transition: all 0.3s ease;
+  }
+  
+  .nav-links li a:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-2px);
+  }
+  
+  /* Active link styling */
+  .nav-links li a.active {
+    background: rgba(255, 255, 255, 0.2);
+    font-weight: bold;
+  }
+  
+  /* Responsive Design */
+  @media (max-width: 768px) {
+    .menu-toggle {
+      display: block;
+      background: transparent;
+      border: none;
+      color: white;
+      font-size: 1.5rem;
+      cursor: pointer;
+      transition: transform 0.3s ease;
+    }
+  
+    .menu-toggle:hover {
+      transform: scale(1.1);
+    }
+  
+    .nav-links {
+      display: none;
+      position: absolute;
+      top: 60px;
+      left: 0;
+      right: 0;
+      background: #2c3e50;
+      flex-direction: column;
+      padding: 1rem;
+      gap: 1rem;
+      animation: slideDown 0.3s ease-out;
+    }
+  
+    .nav-links.active {
+      display: flex;
+    }
+  
+    .nav-links li {
+      width: 50%;
+      text-align: center;
+    }
+  
+    .nav-links li a {
+      display: block;
+      padding: 0.8rem;
+    }
+  }
+  
+  /* Animation */
+  @keyframes slideDown {
+    from {
+      transform: translateY(-10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  
+  /* Optional: Glass effect */
+  .glass-effect {
+    background: rgba(44, 62, 80, 0.9);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  
+  /* Optional: Dark mode */
+  @media (prefers-color-scheme: dark) {
+    .title-bar {
+      background: linear-gradient(to right, #1a1a1a, #2c3e50);
+    }
+  }
+  
+  /* Optional: Hover effects for buttons or special elements */
+  .special-button {
+    padding: 0.5rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    transition: all 0.3s ease;
+  }
+  
+  .special-button:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.4);
+    transform: translateY(-2px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  }

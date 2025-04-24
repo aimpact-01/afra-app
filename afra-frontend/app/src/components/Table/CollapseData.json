@@ -1,0 +1,101 @@
+{
+    "collapseData":[
+        {
+            "kickout_id": "KO_20240120_001",
+            "current_status": "IN_PROGRESS",
+            "workflow_stages": [
+                {
+                    "stage": "CLASSIFICATION",
+                    "status": "COMPLETED",
+                    "timestamp": "2024-01-20T15:00:00Z",
+                    "notes": "FTB Setup Required"
+                },
+                {
+                    "stage": "FTB_SETUP_INITIATED",
+                    "status": "COMPLETED",
+                    "timestamp": "2024-01-20T15:15:00Z",
+                    "notes": "Form submitted successfully"
+                },
+                {
+                    "stage": "FUND_ADMIN_IMPORT",
+                    "status": "COMPLETED",
+                    "timestamp": "2024-01-20T15:20:00Z",
+                    "notes": "Import successful"
+                },
+                {
+                    "stage": "AEXEO_IMPORT",
+                    "status": "IN_PROGRESS",
+                    "timestamp": "2024-01-20T15:25:00Z",
+                    "notes": "Processing setup"
+                },
+                {
+                    "stage": "RTL_RESTART",
+                    "status": "PENDING",
+                    "timestamp": null,
+                    "notes": "Required for TUDOR3"
+                }
+            ],
+            "audit_trail": [
+                {
+                    "action": "SETUP_INITIATED",
+                    "timestamp": "2024-01-20T15:00:00Z",
+                    "user": "john.doe@citco.com"
+                },
+                {
+                    "action": "FORM_SUBMITTED",
+                    "timestamp": "2024-01-20T15:15:00Z",
+                    "user": "john.doe@citco.com"
+                }
+            ]
+        
+        }, 
+        {
+        "kickout_id": "KO_20240120_002",
+        "current_status": "IN_PROGRESS",
+        "workflow_stages": [
+            {
+                "stage": "CLASSIFICATION",
+                "status": "COMPLETED",
+                "timestamp": "2024-01-20T15:00:00Z",
+                "notes": "FTB Setup Required"
+            },
+            {
+                "stage": "FTB_SETUP_INITIATED",
+                "status": "COMPLETED",
+                "timestamp": "2024-01-20T15:15:00Z",
+                "notes": "Form submitted successfully"
+            },
+            {
+                "stage": "FUND_ADMIN_IMPORT",
+                "status": "COMPLETED",
+                "timestamp": "2024-01-20T15:20:00Z",
+                "notes": "Import successful"
+            },
+            {
+                "stage": "AEXEO_IMPORT",
+                "status": "IN_PROGRESS",
+                "timestamp": "2024-01-20T15:25:00Z",
+                "notes": "Processing setup"
+            },
+            {
+                "stage": "RTL_RESTART",
+                "status": "PENDING",
+                "timestamp": null,
+                "notes": "Required for TUDOR3"
+            }
+        ],
+        "audit_trail": [
+            {
+                "action": "SETUP_INITIATED",
+                "timestamp": "2024-01-20T15:00:00Z",
+                "user": "john.doe@citco.com"
+            },
+            {
+                "action": "FORM_SUBMITTED",
+                "timestamp": "2024-01-20T15:15:00Z",
+                "user": "john.doe@citco.com"
+            }
+        ]
+        }
+    ]
+}

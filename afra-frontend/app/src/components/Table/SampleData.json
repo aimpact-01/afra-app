@@ -1,0 +1,30 @@
+
+   { "sampleData":[
+    {
+        "kickout_id": "KO_20240120_001",
+        "type": "FTB_SETUP",
+        "status": "IN_PROGRESS",
+        "priority": "HIGH",
+        "created_at": "2024-01-20T15:00:00Z",
+        "last_updated": "2024-01-20T15:25:00Z"
+    },
+    {
+        "kickout_id": "KO_20240120_002",
+        "type": "TID_SETUP",
+        "status": "PENDING",
+        "priority": "MEDIUM",
+        "created_at": "2024-01-20T15:10:00Z",
+        "last_updated": "2024-01-20T15:10:00Z"
+    },
+    {
+      "kickout_id": "KO_20240120_001",
+      "type": "FTB_SETUP",
+      "status": "IN_PROGRESS",
+      "priority": "HIGH",
+      "created_at": "2024-01-20T15:00:00Z",
+      "last_updated": "2024-01-20T15:25:00Z"
+  }
+    ]
+}
+
+

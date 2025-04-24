@@ -1,0 +1,65 @@
+.collapsible-table {
+    width: 60%;
+    border-collapse: collapse;
+    margin: 20px 2rem;
+  }
+  
+  .collapsible-table th,
+  .collapsible-table td {
+    padding: 12px;
+    font-size: 12px;
+    text-align: left;
+    border: 1px solid #ddd;
+  }
+  .kickout-id {
+    color: #0056b3;
+  }
+  .collapsible-table th {
+    background-color: #f4f4f4;
+    font-weight: bold;
+  }
+  
+  .toggle-button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    width: 25px;
+    height: 25px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .toggle-button:hover {
+    background-color: #0056b3;
+  }
+  
+  .main-row:hover {
+    background-color: #f8f9fa;
+  }
+  
+  .expanded-content {
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+  }
+  
+  .expanded-content p {
+    margin: 5px 0;
+  }
+  .status-completed {
+    background-color: #e6ffe6;
+    color: #006600;
+  }
+  
+  .status-in-progress {
+    background-color: #fff3e6;
+    color: #cc7700;
+  }
+  
+  .status-pending {
+    background-color: #f2f2f2;
+    color: #666666;
+  }

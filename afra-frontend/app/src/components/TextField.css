@@ -1,0 +1,47 @@
+/* TextField.css */
+.text-field-container {
+    margin-top: 6rem;
+    margin-left: 2rem;
+  }
+  
+  .text-field-label {
+    display: block;
+    margin-bottom: 0.5rem;
+    padding:10px 0;
+    font-weight: 400;
+    font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+    color:rgb(0 0 0 / 60%)
+  } */
+  
+  .text-field {
+    margin-top: 1rem;
+    margin-left: 2rem;
+    width: 50%;
+    height:12px;
+    padding: 0.75rem;
+    font-size: 1rem;
+    border-radius: 4px;
+    transition: border-color 0.3s ease;
+  }
+  
+  .text-field:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+  }
+  
+  .text-field.error {
+    border-color: #dc3545;
+  }
+  
+  .error-message {
+    color: #dc3545;
+    font-size: 0.875rem;
+    margin-top: 0.25rem;
+    display: block;
+  }
+  
+  .required {
+    color: #dc3545;
+    margin-left: 2px;
+  }
