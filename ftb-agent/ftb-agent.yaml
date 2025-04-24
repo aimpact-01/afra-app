@@ -1,0 +1,1378 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for AWS Bedrock multi-agent collaboration for ftb agent resolution workflow with problem summary input, team assignments, and SQS-based UI updates.
+
+Parameters:
+  PythonRuntime:
+    Type: String
+    Default: python3.12
+    Description: Python runtime for Lambda functions
+  BedrockModelId:
+    Type: String
+    Default: 'anthropic.claude-3-haiku-20240307-v1:0'
+    Description: Bedrock foundation model ID for agents
+  BucketName:
+    Type: String
+    Default: test-hloberas-dev-16058
+    Description: Bucket Name
+  CFPrefix:
+    Type: String
+    Default: aimpact
+    Description: Prefix for the CloudFormation resources
+
+Resources:
+  GetKickoutLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${CFPrefix}-get-kickout"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers:
+        - arn:aws:lambda:us-east-1:911962207156:layer:psycopg2:66
+      Runtime: python3.9
+      Timeout: 900
+      MemorySize: 256
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-63052429
+        SubnetIds: 
+          - subnet-7e701c51
+          - subnet-8a586dc1
+          - subnet-0e4ac0e8c4847ca2c
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import psycopg2
+          import datetime
+
+          def lambda_handler(event, context):
+            print(event)
+            kickout_id = event['pathParameters']['kickoutId']
+
+            l_conn_string = "dbname='aimpactdb' host='aimpact-afra-db.cupaxahi7rdo.us-east-1.rds.amazonaws.com' user='postgres' password='password123' port='5432'"
+            conn = psycopg2.connect(l_conn_string) 
+
+            if kickout_id == 'all':
+              query = "select * from kickouts"
+              curr = conn.cursor()
+              curr.execute(query)
+              kickouts = curr.fetchall()
+
+              kickouts_arr = []
+
+              for item in kickouts:
+                d = {}
+                d['kickout_id'] = list(item)[0]
+                d['kickout_type'] = list(item)[4]
+                d['status'] = list(item)[6]
+                d['priority'] = list(item)[7]
+                d['created_at'] = str(list(item)[9])
+                d['last_updated'] = str(list(item)[13])
+                kickouts_arr.append(d)
+
+              return {
+                'statusCode': 200,
+                'headers': {
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Headers': 'Content-Type',
+                  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS'
+                },
+                'body': json.dumps({
+                  "kickouts": kickouts_arr
+                })
+              }
+            else:
+              query = f"select request_id from kickouts where kickout_id = '{kickout_id}'"
+              curr = conn.cursor()
+              curr.execute(query)
+
+              request_id = list(curr.fetchone())[0]
+
+              query = f"select * from workflow_stages where request_id = '{request_id}' order by stage_id ASC"
+              curr.execute(query)
+              workflow = curr.fetchall()
+
+              workflow_arr = []
+
+              for stage in workflow:
+                d = {}
+                d['stage'] = list(stage)[2]
+                d['status'] = list(stage)[3]
+                d['team'] = list(stage)[4]
+                d['timestamp'] = str(list(stage)[5])
+                d['notes'] = str(list(stage)[7])
+                workflow_arr.append(d)
+                
+              curr.close()
+              conn.close()
+
+              return {
+                'statusCode': 200,
+                'headers': {
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+                  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+                },
+                'body': json.dumps({
+                  "kickout_id": kickout_id,
+                  "workflow": workflow_arr
+                })
+              }
+     
+  GetKickoutLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref GetKickoutLambda
+      Principal: apigateway.amazonaws.com
+
+  SubmitKickoutLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${CFPrefix}-submit-kickout"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers:
+        - arn:aws:lambda:us-east-1:911962207156:layer:psycopg2:66
+      Runtime: python3.9
+      Timeout: 900
+      MemorySize: 256
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-63052429
+        SubnetIds: 
+          - subnet-7e701c51
+          - subnet-8a586dc1
+          - subnet-0e4ac0e8c4847ca2c
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import psycopg2
+          import datetime
+
+          def lambda_handler(event, context):
+            print(event)
+
+            body = json.loads(event['body'])
+            description = body.get('description', 'Missing description')
+            kickout_type = body.get('kickout_type', 'Missing kickout_type')
+            priority = body.get('priority', 'Low')
+            details = body.get('details', 'Missing details')
+            print(details)
+
+            l_conn_string = "dbname='aimpactdb' host='aimpact-afra-db.cupaxahi7rdo.us-east-1.rds.amazonaws.com' user='postgres' password='password123' port='5432'"
+            conn = psycopg2.connect(l_conn_string) 
+
+            query = f"select kickout_id from kickouts order by kickout_id DESC LIMIT 1"
+            curr = conn.cursor()
+            curr.execute(query)
+            last_kickout_id = int(list(curr.fetchone())[0].split('_')[1])
+            next_kickout_id = last_kickout_id + 1
+
+            insert = "INSERT INTO public.kickouts " + \
+                "(kickout_id, request_id, entity_type, entity_id, kickout_type, description, status, priority, assigned_team, created_at, resolved_at, resolution_notes, details) " + \
+                  f"VALUES('KO_{str(next_kickout_id)}', Null, '{kickout_type}', '1', '{kickout_type}', '{description}', 'NEW', '{priority}', 'UNASSIGNED', CURRENT_TIMESTAMP, Null, Null, '{json.dumps(details)}')"
+
+            print(insert)
+            curr.execute(insert)
+            conn.commit()
+            curr.close()
+            conn.close()
+
+            return {
+              'statusCode': 200,
+              'headers': {
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+                  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+              },
+              'body': json.dumps({
+                'kickout_id': next_kickout_id
+              })
+            }
+
+  SubmitKickoutLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SubmitKickoutLambda
+      Principal: apigateway.amazonaws.com
+
+  SubmitFTBLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${CFPrefix}-submit-ftb"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers:
+        - arn:aws:lambda:us-east-1:911962207156:layer:psycopg2:66
+      Runtime: python3.9
+      Timeout: 900
+      MemorySize: 256
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-63052429
+        SubnetIds: 
+          - subnet-7e701c51
+          - subnet-8a586dc1
+          - subnet-0e4ac0e8c4847ca2c
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import psycopg2
+          import datetime
+
+          def lambda_handler(event, context):
+            print(event)
+
+            body = json.loads(event['body'])
+            kickout_id = body.get('kickout_id', 'NOT_FOUND')
+
+            l_conn_string = "dbname='aimpactdb' host='aimpact-afra-db.cupaxahi7rdo.us-east-1.rds.amazonaws.com' user='postgres' password='password123' port='5432'"
+            conn = psycopg2.connect(l_conn_string) 
+
+            query = f"select priority from kickouts where kickout_id = '{kickout_id}'"
+            curr = conn.cursor()
+            curr.execute(query)
+            priority = list(curr.fetchone())[0]
+            print(priority)
+
+            query = "select request_id from ftb_setup_requests order by request_id DESC LIMIT 1"
+            curr = conn.cursor()
+            curr.execute(query)
+            last_request_id = int(list(curr.fetchone())[0].split('_')[1])
+            if last_request_id < 100:
+              next_request_id = 100
+            else:
+              next_request_id = last_request_id + 1
+
+            insert = "INSERT INTO public.ftb_setup_requests " + \
+              "(request_id, request_type, entity_id, status, priority, requested_by, requested_at, completed_at, current_stage, notes) " + \
+              f"VALUES('FTB_{str(next_request_id)}', 'FTB', '1', 'NEW', '{priority}', 'USER3', CURRENT_TIMESTAMP, Null, 'FTB_SETUP_INITIATED', '')"
+            curr.execute(insert)
+            conn.commit()
+
+            update = f"UPDATE kickouts SET request_id = 'FTB_{str(next_request_id)}', status = 'IN_PROGRESS' where kickout_id = '{kickout_id}'"
+            curr.execute(update)
+            conn.commit()
+            curr.close()
+            conn.close()
+
+            return {
+              'statusCode': 200,
+              'headers': {
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+                  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+              },
+              'body': json.dumps({
+                'request_id': next_request_id
+              })
+            }
+
+  SubmitFTBLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SubmitFTBLambda
+      Principal: apigateway.amazonaws.com
+
+  DynamicFormLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${CFPrefix}-dynamic-form"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers:
+        - arn:aws:lambda:us-east-1:911962207156:layer:psycopg2:66
+      Runtime: python3.9
+      Timeout: 900
+      MemorySize: 256
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-63052429
+        SubnetIds: 
+          - subnet-7e701c51
+          - subnet-8a586dc1
+          - subnet-0e4ac0e8c4847ca2c
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import psycopg2
+          import datetime
+
+          def lambda_handler(event, context):
+            print(event)
+
+            kickout_id = event['pathParameters']['kickoutId']
+
+            l_conn_string = "dbname='aimpactdb' host='aimpact-afra-db.cupaxahi7rdo.us-east-1.rds.amazonaws.com' user='postgres' password='password123' port='5432'"
+            conn = psycopg2.connect(l_conn_string) 
+
+            #curr = conn.cursor()
+            #curr.execute(query)
+            #curr.close()
+            #conn.close()
+
+            # call the data extract agent here
+
+            return {
+              'statusCode': 200,
+              'headers': {
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+                  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+              },
+              'body': json.dumps({
+                'kickout_id': kickout_id,
+                'details': {
+                  'fund_name': 'Test Fund',
+                  'fund_code': 'TESTFUND'
+                }
+              })
+            }
+
+  DynamicFormLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DynamicFormLambda
+      Principal: apigateway.amazonaws.com
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:AttachNetworkInterface'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                  - sqs:*
+                  - s3:*
+                  - stepfunction:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock:*
+                Resource: '*'
+
+  LangChainLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub "${CFPrefix}-langchain-layer"
+      Description: Layer containing LangChain and dependencies
+      CompatibleRuntimes:
+        - !Ref PythonRuntime
+      Content:
+        S3Bucket: !Ref BucketName
+        S3Key: langchain-layer.zip
+
+  FTBDataExtractionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${CFPrefix}-ftb-data-extraction"
+      Handler: lambda_handler.lambda_handler
+      Runtime: !Ref PythonRuntime
+      Code:
+        S3Bucket: !Ref BucketName
+        S3Key: ftb_data_extraction/lambda_function.zip
+      Timeout: 900
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers:
+        - !Ref LangChainLayer
+      Tags:
+        - Key: AppName
+          Value: HACKATHON
+
+  # Lambda for Request Creation
+  # CreateFTBRequestLambda:
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     FunctionName: !Sub "${CFPrefix}-create-ftb-request"
+  #     Handler: index.handler
+  #     Role: !GetAtt LambdaExecutionRole.Arn
+  #     Runtime: !Ref PythonRuntime
+  #     Environment:
+  #       Variables:
+  #         FTB_REQUEST_TABLE: !Ref FTBSetupRequestsTable
+  #         TEAMS_TABLE: !Ref TeamsTable
+  #         MODEL_ID: !Ref BedrockModelId
+  #     Timeout: 900
+  #     Tags:
+  #       - Key: AppName
+  #         Value: HACKATHON
+  #     Code:
+  #       ZipFile: |
+  #         import json
+  #         import boto3
+  #         import re
+  #         import uuid
+  #         from datetime import datetime
+  #         import os
+
+  #         dynamodb = boto3.resource('dynamodb')
+  #         requests_table = dynamodb.Table(os.environ['FTB_REQUEST_TABLE'])
+  #         teams_table = dynamodb.Table(os.environ['TEAMS_TABLE'])
+  #         bedrock = boto3.client('bedrock-runtime')
+
+  #         def generate_request_id():
+  #           while True:
+  #             request_id = f"T{str(uuid.uuid4())[:3]}"
+  #             if re.match(r'^T[0-9]{3}$', request_id):
+  #               response = requests_table.get_item(Key={'request_id': request_id})
+  #               if 'Item' not in response:
+  #                 return request_id
+
+  #         def extract_client_name(summary):
+  #           prompt = f"Extract the client from the following summary: '{summary}'. Return only the identifier or 'unknown' if not found."
+  #           response = bedrock.invoke_model(
+  #             modelId=os.environ['MODEL_ID'],
+  #             body=json.dumps({
+  #               'prompt': prompt,
+  #               'max_tokens': 50
+  #             })
+  #           )
+  #           return json.loads(response['body'].read()).get('text', 'unknown').strip()
+
+  #         def get_team(step_key):
+  #           return teams_table.get_item(Key={'step_key': step_key})['Item']
+
+  #         def handler(event, context):
+  #           summary = event.get('summary', '').strip()
+  #           if not summary:
+  #             return {'statusCode': 400, 'body': json.dumps({'error': 'Summary is required'})}
+  #           request_id = generate_request_id()
+  #           client_name = extract_client_name(summary)
+  #           request = {
+  #             'request_id': request_id,
+  #             'status': 'open',
+  #             'summary': summary,
+  #             'client': client_name,
+  #             'created_at': datetime.utcnow().isoformat(),
+  #             'workflow_steps': {
+  #               'validate_missing': {'status': 'pending', 'team': get_team('validate_missing')['team_name']}
+  #             }
+  #           }
+  #           requests_table.put_item(Item=ticket)
+  #           return {'statusCode': 200, 'body': json.dumps({'request_id': request_id, 'summary': summary})}
+
+  # UserConfirmationLambda:
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     FunctionName: !Sub "${CFPrefix}-user-confirmation"
+  #     Handler: index.handler
+  #     Role: !GetAtt LambdaExecutionRole.Arn
+  #     Runtime: !Ref PythonRuntime
+  #     Timeout: 900
+  #     Environment:
+  #       Variables:
+  #         FTB_REQUEST_TABLE: !Ref FTBSetupRequestsTable
+  #         TEAMS_TABLE: !Ref TeamsTable
+  #     Code:
+  #       ZipFile: |
+  #         import json
+  #         import boto3
+  #         import os
+
+  #         dynamodb = boto3.resource('dynamodb')
+  #         requests_table = dynamodb.Table(os.environ['FTB_REQUEST_TABLE'])
+  #         teams_table = dynamodb.Table(os.environ['TEAMS_TABLE'])
+
+  #         def get_team(step_key):
+  #           return teams_table.get_item(Key={'step_key': step_key})['Item']
+
+  #         def handler(event, context):
+  #           request_id = event.get('request_id')
+  #           user_response = event.get('user_response', '').lower()
+  #           team = get_team('user_confirmation')
+  #           if user_response == 'yes':
+  #             requests_table.update_item(
+  #               Key={'request_id': request_id},
+  #               UpdateExpression='SET #status = :status, #steps = :steps',
+  #               ExpressionAttributeNames={'#status': 'status', '#steps': 'workflow_steps'},
+  #               ExpressionAttributeValues={
+  #                 ':status': 'resolved',
+  #                 ':steps': {
+  #                   'validate_missing': {'status': 'completed', 'team': get_team('validate_missing')['team_name']},
+  #                   'form_setup': {'status': 'completed', 'team': get_team('form_setup')['team_name']},
+  #                   'import_form': {'status': 'completed', 'team': get_team('import_form')['team_name']},
+  #                   'validate_existence': {'status': 'completed', 'team': get_team('validate_existence')['team_name']},
+  #                   'restart': {'status': 'completed', 'team': get_team('restart')['team_name']},
+  #                   'user_confirmation': {'status': 'completed', 'team': team['team_name']}
+  #                 }
+  #               }
+  #             )
+  #             return {'statusCode': 200, 'body': json.dumps({'message': 'Ticket resolved'})}
+          
+  #         #sfn.start_execution(
+  #         #  stateMachineArn='arn:aws:states:YOUR_REGION:YOUR_ACCOUNT:stateMachine:HumanEscalationWorkflow',
+  #         #  input=json.dumps({
+  #         #    'request_id': request_id,
+  #         #    'issue': 'User reported issue persists',
+  #         #    'history': event.get('conversation_history', [])
+  #         #  })
+  #         #)
+
+  #         requests_table.update_item(
+  #           Key={'ticket_id': ticket_id},
+  #           UpdateExpression='SET #status = :status, #steps = :steps',
+  #           ExpressionAttributeNames={'#status': 'status', '#steps': 'workflow_steps'},
+  #           ExpressionAttributeValues={
+  #             ':status': 'escalated',
+  #             ':steps': {
+  #               'validate_missing': {'status': 'completed', 'team': get_team('validate_missing')['team_name']},
+  #               'form_setup': {'status': 'completed', 'team': get_team('form_setup')['team_name']},
+  #               'import_form': {'status': 'completed', 'team': get_team('import_form')['team_name']},
+  #               'validate_existence': {'status': 'completed', 'team': get_team('validate_existence')['team_name']},
+  #               'restart': {'status': 'completed', 'team': get_team('restart')['team_name']},
+  #               'user_confirmation': {'status': 'failed', 'team': team['team_name']}
+  #             }
+  #           }
+  #         )
+
+  #         return {'statusCode': 200, 'body': json.dumps({'message': 'Ticket escalated'})}
+
+  # RestartLambda:
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     FunctionName: !Sub "${CFPrefix}-restart-app"
+  #     Handler: index.handler
+  #     Role: !GetAtt LambdaExecutionRole.Arn
+  #     Runtime: !Ref PythonRuntime
+  #     Timeout: 900
+  #     Environment:
+  #       Variables:
+  #         FTB_REQUEST_TABLE: !Ref FTBSetupRequestsTable
+  #         TEAMS_TABLE: !Ref TeamsTable
+  #     Code:
+  #       ZipFile: |
+  #         import json
+  #         import boto3
+  #         import os
+
+  #         ssm = boto3.client('ssm')
+  #         dynamodb = boto3.resource('dynamodb')
+  #         requests_table = dynamodb.Table(os.environ['FTB_REQUEST_TABLE'])
+  #         teams_table = dynamodb.Table(os.environ['TEAMS_TABLE'])
+
+  #         def get_team(step_key):
+  #           return teams_table.get_item(Key={'step_key': step_key})['Item']
+
+  #         def handler(event, context):
+  #           request_id = event.get('request_id')
+        
+  #           team = get_team('restart')
+  #           requests_table.update_item(
+  #             Key={'request_id': request_id},
+  #             UpdateExpression='SET #status = :status, #steps = :steps',
+  #             ExpressionAttributeNames={'#status': 'status', '#steps': 'workflow_steps'},
+  #             ExpressionAttributeValues={
+  #               ':status': 'restarted',
+  #               ':steps': {
+  #                 'validate_missing': {'status': 'completed', 'team': get_team('validate_missing')['team_name']},
+  #                 'form_setup': {'status': 'completed', 'team': get_team('form_setup')['team_name']},
+  #                 'import_form': {'status': 'completed', 'team': get_team('import_form')['team_name']},
+  #                 'validate_existence': {'status': 'completed', 'team': get_team('validate_existence')['team_name']},
+  #                 'restart': {'status': 'completed', 'team': team['team_name']},
+  #                 'user_confirmation': {'status': 'pending', 'team': get_team('user_confirmation')['team_name']}
+  #               }
+  #             }
+  #           )
+  #           return {'statusCode': 200, 'body': json.dumps({'message': 'Application restarted'})}
+
+  # ApiHandlerLambda:
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     FunctionName: !Sub "${CFPrefix}-api-handler"
+  #     Handler: index.lambda_handler
+  #     Role: !GetAtt LambdaExecutionRole.Arn
+  #     Runtime: !Ref PythonRuntime
+  #     Timeout: 900
+  #     MemorySize: 256
+  #     Code:
+  #       ZipFile: |
+  #         import boto3
+  #         import logging
+  #         import os
+  #         import json
+  #         from botocore.exceptions import ClientError
+
+  #         logger = logging.getLogger()
+  #         logger.setLevel(logging.INFO)
+
+  #         bedrock_client = boto3.client('bedrock-agent-runtime', region_name='us-east-1', verify=False)
+  #         dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+
+  #         def lambda_handler(event, context):
+  #           try:
+  #             body = json.loads(event['body'])
+  #             kickout_data = body.get('kickoutData')
+  #             action = body.get('action')
+
+  #           except Exception as e:
+  #             return {
+  #               'statusCode': 400,
+  #               'body': json.dumps({'error': 'Invalid input format'})
+  #             }
+
+  #           if action == 'extractFTBDetails':
+  #               prompt = body
+            
+  #           logger.info(f"Prompt sent to Bedrock: {prompt}")
+
+  #           agent_id = os.environ['AGENT_ID']
+  #           alias_id = os.environ['AGENT_ALIAS_ID']
+  #           session_id = context.aws_request_id
+
+  #           try:
+  #             response = bedrock_client.invoke_agent(
+  #               agentId = agent_id,
+  #               agentAliasId = alias_id,
+  #               sessionId = session_id,
+  #               inputText = prompt
+  #             )
+
+  #             completion = ''
+  #             for chunk in response['completion']:
+  #               completion += chunk['chunk']['bytes'].decode('utf-8')
+
+  #             return {
+  #               'statusCode': 200,
+  #               'body': json.dumps(json.loads(completion))
+  #             }
+  #           except Exception as e:
+  #             return {
+  #               'statusCode': 500,
+  #               'body': json.dumps({'error': f'Bedrock Agent error: {str(e)}'})
+  #             }
+  #     VpcConfig:
+  #       SecurityGroupIds:
+  #         - sg-63052429
+  #       SubnetIds: 
+  #         - subnet-7e701c51
+  #         - subnet-8a586dc1
+  #         - subnet-0e4ac0e8c4847ca2c
+  #     Environment:
+  #       Variables:
+  #         AGENT_ID: !Ref FTBAgent
+  #         #AGENT_ALIAS_ID: !GetAtt FTBAgentAlias.AgentAliasId
+  #     Tags:
+  #       - Key: AppName
+  #         Value: HACKATHON
+
+  BedrockAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BedrockAgentPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                  - sqs:*
+                  - s3:*
+                  - stepfunction:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock:*
+                Resource: '*'
+
+  # Bedrock Agents
+  # FTBAgent:
+  #   Type: AWS::Bedrock::Agent
+  #   Properties:
+  #     AgentName: !Sub "${CFPrefix}-ftb-agent"
+  #     FoundationModel: 'anthropic.claude-3-haiku-20240307-v1:0'
+  #     Instruction: |
+  #       You are an AI assistant designed to manage the Fund Trade Broker (FTB) setup process. Your primary responsibilities include data extraction, validation, and workflow management through various stages. Here are your specific functions:
+
+  #       1. FTBDataExtraction:
+  #         - When receiving kickout data, validate and correct the following components:
+  #           * Fund details (fund_code, fund_name, currency)
+  #           * Trader information (trader_code, trader_name)
+  #           * Broker details (broker_code, broker_name)
+  #         - Return the validated and corrected data structure
+  #         - Flag any validation issues in the validation_status object
+  #     AgentResourceRoleArn: !GetAtt BedrockAgentRole.Arn
+  #     ActionGroups:
+  #       - ActionGroupName: FTBDataExtraction
+  #         ApiSchema:
+  #           S3:
+  #             S3BucketName: !Ref BucketName
+  #             S3ObjectKey: openapi-schemas/ftb-agent-data-extract-api-v1.yaml
+  #         ActionGroupExecutor:
+  #           Lambda: !GetAtt FTBDataExtractionLambda.Arn
+  #     Tags:
+  #       AppName: HACKATHON
+
+  MainEntrypointAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${CFPrefix}-entrypoint-api"
+      Description: API for AFRA
+      EndpointConfiguration:
+        Types:
+          - PRIVATE
+        VpcEndpointIds:
+          - vpce-00885819822df6078
+      Policy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: 'execute-api:Invoke'
+            Resource: '*'
+      Tags:
+        - Key: AppName
+          Value: HACKATHON
+
+  FormResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ParentId: !GetAtt MainEntrypointAPI.RootResourceId
+      PathPart: form
+
+  FormIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ParentId: !Ref FormResource
+      PathPart: '{kickoutId}'
+
+  ValidateResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ParentId: !GetAtt MainEntrypointAPI.RootResourceId
+      PathPart: validate
+
+  KickoutResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ParentId: !GetAtt MainEntrypointAPI.RootResourceId
+      PathPart: kickout
+
+  KickoutIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ParentId: !Ref KickoutResource
+      PathPart: '{kickoutId}'
+
+  FTBResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ParentId: !GetAtt MainEntrypointAPI.RootResourceId
+      PathPart: ftb
+
+  GetFormMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ResourceId: !Ref FormIdResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      AuthorizerId: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DynamicFormLambda.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+  
+  ValidateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ResourceId: !Ref ValidateResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      AuthorizerId: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FTBAgentLambda.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+
+  PostFTBMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ResourceId: !Ref FTBResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      AuthorizerId: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SubmitFTBLambda.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+
+  PostKickoutMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ResourceId: !Ref KickoutResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      AuthorizerId: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SubmitKickoutLambda.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+
+  GetKickoutMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ResourceId: !Ref KickoutIdResource
+      HttpMethod: GET
+      RequestParameters:
+        method.request.path.kickoutId: true
+      AuthorizationType: NONE
+      AuthorizerId: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetKickoutLambda.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  KickoutOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ResourceId: !Ref KickoutResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"  # Your specific origin
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: 'Empty'
+
+  KickoutAllOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ResourceId: !Ref KickoutIdResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"  # Your specific origin
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: 'Empty'
+
+  FormOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+      ResourceId: !Ref FormIdResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"  # Your specific origin
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: 'Empty'
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: 
+      - PostKickoutMethod
+      - GetKickoutMethod 
+      - PostFTBMethod
+      - KickoutAllOptionsMethod
+      - KickoutOptionsMethod
+      - GetFormMethod
+      - FormOptionsMethod
+      - ValidateMethod
+    Properties:
+      RestApiId: !Ref MainEntrypointAPI
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: api
+      RestApiId: !Ref MainEntrypointAPI
+      DeploymentId: !Ref ApiDeployment
+      TracingEnabled: True
+      Variables:
+        Stack: api
+      MethodSettings:
+        - ResourcePath: /extract
+          HttpMethod: POST
+          MetricsEnabled: 'false'
+          DataTraceEnabled: 'false'
+        - ResourcePath: /kickout
+          HttpMethod: POST
+          MetricsEnabled: 'false'
+          DataTraceEnabled: 'false'
+        - ResourcePath: /kickout/{kickoutId}
+          HttpMethod: GET
+          MetricsEnabled: 'false'
+          DataTraceEnabled: 'false'
+        - ResourcePath: /ftb
+          HttpMethod: POST
+          MetricsEnabled: 'false'
+          DataTraceEnabled: 'false'
+        - ResourcePath: /form/{kickoutId}
+          HttpMethod: GET
+          MetricsEnabled: 'false'
+          DataTraceEnabled: 'false'
+        - ResourcePath: /validate
+          HttpMethod: POST
+          MetricsEnabled: 'false'
+          DataTraceEnabled: 'false'
+
+  # ApiGatewayLambdaPermission:
+  #   Type: AWS::Lambda::Permission
+  #   Properties:
+  #     Action: lambda:InvokeFunction
+  #     FunctionName: !Ref ApiHandlerLambda
+  #     Principal: apigateway.amazonaws.com
+
+  StatusUpdateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${CFPrefix}-status-update"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers:
+        - arn:aws:lambda:us-east-1:911962207156:layer:psycopg2:66
+      Runtime: python3.9
+      Timeout: 900
+      MemorySize: 256
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-63052429
+        SubnetIds: 
+          - subnet-7e701c51
+          - subnet-8a586dc1
+          - subnet-0e4ac0e8c4847ca2c
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import psycopg2
+          import datetime
+
+          def lambda_handler(event, context):
+            print(event)
+
+            return {
+              'statusCode': 200,
+              'body': 'OK'
+            }
+
+  StatusUpdateQueueFIFO:
+    Type: AWS::SQS::Queue
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Properties:
+      QueueName: !Sub '${CFPrefix}-status-update.fifo'
+      ContentBasedDeduplication: true
+      DeduplicationScope: messageGroup
+      FifoThroughputLimit: perMessageGroupId
+      FifoQueue: true
+      VisibilityTimeout: 900
+      ReceiveMessageWaitTimeSeconds: 5
+      Tags:
+        - Key: AppName
+          Value: HACKATHON
+
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action:
+          - sqs:SendMessage
+          - sqs:GetQueueAttributes
+          - sqs:GetQueueUrl
+          Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Resource:
+            - !GetAtt StatusUpdateQueueFIFO.Arn
+        Version: '2012-10-17'
+      Queues:
+      - Ref: StatusUpdateQueueFIFO
+
+  StatusUpdateFunctionFIFOQueue:
+    Type: 'AWS::Lambda::EventSourceMapping'
+    Properties:
+      BatchSize: 10
+      Enabled: True
+      EventSourceArn: !GetAtt StatusUpdateQueueFIFO.Arn
+      FunctionName: !Ref StatusUpdateFunction
+
+  FTBAgentLambda:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - FTBAgentAlias
+      - LambdaExecutionRole
+    Properties:
+      FunctionName: !Sub "${CFPrefix}-ftb-agent"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: !Ref PythonRuntime
+      Timeout: 900
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          import boto3
+          import logging
+          import os
+          import json
+          from botocore.exceptions import ClientError
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          bedrock_client = boto3.client('bedrock-agent-runtime', region_name='us-east-1', verify=False)
+
+          def lambda_handler(event, context):
+            print(event)
+            try:
+              body = json.loads(event['body'])
+              kickout_id = body.get('kickout_id')
+              details = body.get('details')
+              if 'fund_code' not in details and 'broker_code' not in details and 'trader_code' not in details:
+                return {
+                  'statusCode': 400,
+                  'body': json.dumps({'error': 'Missing required fields: fund_code or broker_code or trader_code'})
+                }
+              else:
+                prompt = {}
+                if 'fund_code' in details:
+                  prompt['fund_code'] = details.get('fund_code')
+                if 'broker_code' in details:
+                  prompt['broker_code'] = details.get('broker_code')
+                if 'trader_code' in details:
+                  prmopt['broker_code'] = details.get('trader_code')
+                if 'fund_name' in details:
+                  prompt['fund_name'] = details.get('fund_name')
+                if 'broker_name' in details:
+                  prompt['broker_name'] = details.get('broker_name')
+                if 'trader_name' in details:
+                  prompt['trader_name'] = details.get('trader_name')
+            except Exception as e:
+              return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'Invalid input format'})
+              }
+            
+            logger.info(f"Prompt sent to Bedrock: {prompt}")
+
+            agent_id = os.environ['AGENT_ID']
+            alias_id = os.environ['AGENT_ALIAS_ID']
+            session_id = context.aws_request_id
+
+            try:
+              response = bedrock_client.invoke_agent(
+                agentId = agent_id,
+                agentAliasId = alias_id,
+                sessionId = session_id,
+                inputText = json.dumps(prompt)
+              )
+
+              completion = ''
+              for chunk in response['completion']:
+                completion += chunk['chunk']['bytes'].decode('utf-8')
+
+              return {
+                'statusCode': 200,
+                'body': json.dumps(json.loads(completion))
+              }
+            except Exception as e:
+              return {
+                'statusCode': 500,
+                'body': json.dumps({'error': f'Bedrock Agent error: {str(e)}'})
+              }
+
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-63052429
+        SubnetIds: 
+          - subnet-7e701c51
+          - subnet-8a586dc1
+          - subnet-0e4ac0e8c4847ca2c
+      Environment:
+        Variables:
+          AGENT_ID: !Ref FTBAgent
+          AGENT_ALIAS_ID: !GetAtt FTBAgentAlias.AgentAliasId
+      Tags:
+        - Key: AppName
+          Value: HACKATHON
+
+  FTBAgentLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref FTBAgentLambda
+      Principal: bedrock.amazonaws.com
+
+  FTBAgentLambdaPermission2:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref FTBAgentLambda
+      Principal: apigateway.amazonaws.com
+
+  DBCheckValidLambda:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaExecutionRole
+    Properties:
+      FunctionName: !Sub "${CFPrefix}-db-check"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: !Ref PythonRuntime
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - arn:aws:lambda:us-east-1:911962207156:layer:psycopg2:66
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-63052429
+        SubnetIds: 
+          - subnet-7e701c51
+          - subnet-8a586dc1
+          - subnet-0e4ac0e8c4847ca2c
+      Code:
+        ZipFile: |
+          import boto3
+          import logging
+          import os
+          import json
+          from botocore.exceptions import ClientError
+          import psycopg2
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def check_and_suggest(event):
+            input_data = event['requestBody']
+            result = input_data
+            return {
+              'statusCode': 200,
+              'body': result
+            }'
+            }
+
+          def lambda_handler(event, context):
+            print(event)
+            try:
+              return check_and_suggest(event)
+            except Exception as e:
+              return {
+                'statusCode': 400,
+                'body': json.dumps({'error': str(e)})
+              }
+            
+  DBCheckValidLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DBCheckValidLambda
+      Principal: bedrock.amazonaws.com
+
+  # Bedrock Agents
+  FTBAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub "${CFPrefix}-ftb-agent"
+      FoundationModel: !Ref BedrockModelId
+      Instruction: |
+        You are a code validation agent that validates and corrects input fields (fund_code, broker_code, trader_code, and optional fund_name, broker_name, trader_name), ensures the corrected values do not exist in a database, and returns corrected values. The input JSON must include at least one of fund_code, broker_code, or trader_code. All provided fields must be validated and corrected. Follow these rules.
+
+        Validation Rules:
+        - fund_code: Must be 3-8 alphanumeric characters with no white-space, must be ALL CAPS, special character allowed are only (-), (_) and (>). Pattern: ^[A-Z0-9-_>]{3,8}$. Example: FUND01
+        - broker_code: Must be 3-20 alphanumeric characters with no white-space, must be ALL CAPS, special character allowed is only (_). Pattern: ^[A-Z0-9_]{3,20}$. Example: BROKER01
+        - trader_code: Must be 1-3 alphanumeric characters with no white-space, must be ALL CAPS, special character allowed are only (-) and (_). Pattern: ^[A-Z0-9-_]{1,3}$. Example: ABC
+        - fund_name: Must be 3-50 characters, letters (A-Z, a-z), numbers (0-9), spaces, or hyphens. Pattern: ^[A-Za-z0-9 -]{3-50}$. Example: Global Fund
+        - broker_name: Must be 3-20 characters, letters (A-Z, a-z), numbers (0-9), spaces, or hyphens. Pattern: ^[A-Za-z0-9 -]{3-20}$. Example: Broker Inc
+        - trader_name: Must be 3-20 characters, letters (A-Z, a-z), numbers (0-9), spaces, or hyphens. Pattern: ^[A-Za-z0-9 -]{3-20}$. Example: Trader XYZ
+
+        Steps:
+        1. Check if the input JSON contains at least one of fund_code, broker_code, or trader_code. If none are present, return: {"error": "At least one of fund_code, broker_code, or trader_code is required"}.
+        2. For each provided field, validate against its pattern and length:
+           - fund_code: Check if it matches ^[A-Z0-9-_>]{3,8}$.
+           - broker_code: Check if it maches ^[A-Z0-9_]{3,20}$.
+           - trader_code: Check if it matches ^[A-Z0-9-_]{1,3}$.
+           - fund_name: Check if it matches ^[A-Za-z0-9 -]{3-50}$.
+           - broker_name: Check if it matches ^[A-Za-z0-9 -]{3-20}$.
+           - trader_name: Check if it matches ^[A-Za-z0-9 -]{3-20}$.
+        3. If a field is valid, keep it as is for the next step.
+        4. If a field is invalid, suggest a corrected value by reasoning about the input's structure:
+           - For fund_code:
+             - Make sure ALL CAPS
+             - If too long, truncate to 8 characters
+             - If too short, pad with 0s
+           - For broker_code:
+             - Make sure ALL CAPS
+             - If too long, truncate to 20 characters
+             - If too short, pad with 0s
+           - For trader_code:
+             - Make sure ALL CAPS
+             - If too long, truncate to 3 characters
+             - If too short, pad with 0s
+           - For fund_name:
+             - If too long, truncate to 50 characters
+             - If too short, pad with spaces
+           - For broker_name:
+             - If too long, truncate to 20 characters
+             - If too short, pad with spaces
+           - For trader_name:
+             - If too long, truncate to 20 characters
+             - If too short, pad with spaces
+        5. Invoke 'CheckDatabaseAndValidCodesAction' action group to:
+           - Validate corrected values against a list of valid codes/names
+           - Ensure values do not exist in the database
+           - Suggest non-existing, valid alternatives if needed
+        6. Return a JSON object containing all provided fields with their corrected values.
+        7. Ensure the output is a valid JSON and matches the structure of the provided fields.
+
+        Examples:
+        Input: {"fund_code": "fund01", "broker_code": "BROKER01", "trader_code": "ABC"}
+        Output: {"fund_code": "FUND01", "broker_code": "BROKER01", "trader_code": "ABC"}
+
+        Input: {"fund_code": "FUND01", "broker_code": "BROKeR-01", "trader_code": "ABC"}
+        Output: {"fund_code": "FUND01", "broker_code": "BROKER01", "trader_code": "ABC"}
+
+        Input: {"fund_code": "FUND01", "broker_code": "BROKER01", "trader_code": "ABCDE"}
+        Output: {"fund_code": "FUND01", "broker_code": "BROKER01", "trader_code": "ABC"}
+
+        Input: {"fund_code": "FUND01", "broker_code": "BROKER01", "trader_code": "ABC", "fund_name": "invalid", "broker_name": "invalid", "trader_name": "invalid"}
+        Output: {"fund_code": "FUND01", "broker_code": "BROKER01", "trader_code": "ABC", "fund_name": "Global Fund", "broker_name": "Broker Inc", "trader_name": "Trader XYZ"}
+
+        Notes:
+        - Prioritize realistic corrections (e.g., fund01 -> FUND01, Global@Fund -> Global Fund).
+        - Only process provided fields; do not assume missing fields.
+        - Rely on the action group for valid code/name checks and existence
+        - Always return valid JSON.
+      AgentResourceRoleArn: !GetAtt BedrockAgentRole.Arn
+      ActionGroups:
+        - ActionGroupName: CheckDatabaseAndValidCodesAction
+          ActionGroupExecutor:
+            Lambda: !GetAtt DBCheckValidLambda.Arn
+          ApiSchema:
+            S3:
+              S3BucketName: !Ref BucketName
+              S3ObjectKey: openapi-schemas/check_database_valid.yaml
+      Tags:
+        AppName: HACKATHON
+
+
+  FTBAgentAlias:
+    Type: AWS::Bedrock::AgentAlias
+    DependsOn: FTBAgent
+    Properties:
+      AgentId: !Ref FTBAgent
+      AgentAliasName: !Sub "${CFPrefix}-ftb-agent-alias"
+      Description: Alias for FTB Agent
+      Tags:
+        AppName: HACKATHON

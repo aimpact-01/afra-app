@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS CloudFormation Template for PostgreSQL RDS Instance'
+
+Parameters:
+  CFPrefix:
+    Type: String
+    Default: aimpact
+    Description: Prefix for the CloudFormation resources
+
+  DBUsername:
+    Type: String
+    Description: The database admin username
+    MinLength: '1'
+    MaxLength: '16'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    Default: postgres
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: The database admin password
+    MinLength: '8'
+    MaxLength: '41'
+    AllowedPattern: '[a-zA-Z0-9]*'
+    Default: 'password123'
+
+  DBInstanceClass:
+    Description: The database instance type
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+      - db.r5.large
+      - db.r5.xlarge
+      - db.r5.2xlarge
+
+  # VpcId:
+  #   Type: String
+  #   Description: VPC where the DB will be created
+  #   Default: vpc-df8661b7
+
+  # SubnetIds:
+  #   Type: List<AWS::EC2::Subnet::Id>
+  #   Description: List of Subnet IDs for the DB subnet group
+  #   Default: subnet-6e670b41,subnet-7c596c37,subnet-011994f5def669048
+
+Resources:
+  PostgresDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: !Sub "${CFPrefix}db"
+      Engine: postgres
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBInstanceClass: !Ref DBInstanceClass
+      DBInstanceIdentifier: !Sub "${CFPrefix}-afra-db"
+      AllocatedStorage: '20'
+      MaxAllocatedStorage: '100'
+      StorageType: gp2
+      MultiAZ: false
+      PubliclyAccessible: false
+      DBSubnetGroupName: citco-dbsubnetgroup
+      VPCSecurityGroups:
+        - sg-00dcb97a34ebcf77f
+      BackupRetentionPeriod: 7
+      DeleteAutomatedBackups: true
+      Port: 5432
+      StorageEncrypted: true
+      Tags:
+        - Key: AppName
+          Value: HACKATHON
+        - Key: RunSchedule
+          Value: 'running'
+
+Outputs:
+  DBEndpoint:
+    Description: 'PostgreSQL Database Endpoint'
+    Value: !GetAtt PostgresDB.Endpoint.Address
+
+  DBPort:
+    Description: 'PostgreSQL Database Port'
+    Value: !GetAtt PostgresDB.Endpoint.Port

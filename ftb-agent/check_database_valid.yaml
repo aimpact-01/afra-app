@@ -1,0 +1,51 @@
+openapi: 3.0.0
+info:
+  title: Check Database and Valid Codes API
+  description: This API checks the database and validates the codes against S3
+  version: 1.0.0
+paths:
+  /check-database-valid:
+    post:
+      summary: Validate against S3 codes and check DB existence
+      description: |
+        This endpoint validates the codes against S3 and checks the database for existence.
+      operationId: checkDatabaseValid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fund_code:
+                  type: string
+                fund_name:
+                  type: string
+                broker_code:
+                  type: string
+                broker_name:
+                  type: string
+                trader_code:
+                  type: string
+                trader_name:
+                  type: string
+      responses:
+        '200':
+          description: Valid, non-existing values
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fund_code:
+                    type: string
+                  fund_name:
+                    type: string
+                  broker_code:
+                    type: string
+                  broker_name:
+                    type: string
+                  trader_code:
+                    type: string
+                  trader_name:
+                    type: string
